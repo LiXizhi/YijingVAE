@@ -80,6 +80,17 @@ class BetaVAE(nn.Module):
         z = self.reparameterize(mu, logvar)
         return self.decode(z), mu, logvar, z
 
+    def parameter_counts(self) -> dict:
+        """Return total / encoder / decoder parameter counts (number of
+        scalars, including biases). Useful for the web UI and CLI logs."""
+        def _count(module: nn.Module) -> int:
+            return sum(p.numel() for p in module.parameters())
+        enc = _count(self.encoder) + _count(self.fc_mu) + _count(self.fc_logvar)
+        dec = _count(self.fc_dec) + _count(self.decoder)
+        total = sum(p.numel() for p in self.parameters())
+        return {"total": total, "encoder": enc, "decoder": dec,
+                "trainable": sum(p.numel() for p in self.parameters() if p.requires_grad)}
+
 
 def beta_vae_loss(x_hat: torch.Tensor, x: torch.Tensor,
                   mu: torch.Tensor, logvar: torch.Tensor,

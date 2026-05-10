@@ -22,7 +22,11 @@ from flask_cors import CORS
 from PIL import Image
 
 from datasets import dataset_available, get_dataloaders
-from train import TrainingManager, TrainConfig
+from train import (
+    TrainingManager, TrainConfig,
+    list_checkpoints as _list_checkpoints,
+    checkpoint_path as _checkpoint_path,
+)
 
 
 def _device_info(device=None) -> dict:
@@ -95,6 +99,7 @@ def _build_arch(model):
         "in_channels": c, "image_size": s, "hidden": h,
         "enc_size": enc, "feat": feat, "latent_dim": model.latent_dim,
         "shapes": shapes,
+        "param_counts": model.parameter_counts(),
     }
 
 download_lock = threading.Lock()
@@ -243,6 +248,7 @@ def api_start():
         num_workers=int(data.get("num_workers", 0)),
         out_dir=data.get("out_dir", CHECKPOINTS),
         device=data.get("device", "auto"),
+        resume=bool(data.get("resume", False)),
     )
     ok = manager.start(cfg)
     return jsonify({"ok": ok, "state": manager.snapshot()})
@@ -252,6 +258,18 @@ def api_start():
 def api_stop():
     ok = manager.stop()
     return jsonify({"ok": ok, "state": manager.snapshot()})
+
+
+@app.post("/api/train/preview_fps")
+def api_preview_fps():
+    """Set the rate (Hz, 1-30) at which the training loop emits a sample image."""
+    data = request.get_json(silent=True) or {}
+    try:
+        fps = float(data.get("fps"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "fps must be numeric"}), 400
+    fps = manager.set_preview_fps(fps)
+    return jsonify({"ok": True, "fps": fps})
 
 
 @app.get("/api/train/state")
@@ -265,16 +283,51 @@ def api_state():
 
 
 # ---------- inference APIs ----------
+@app.get("/api/checkpoints")
+def api_checkpoints():
+    """List every saved checkpoint, indexed by dataset."""
+    items = _list_checkpoints(CHECKPOINTS)
+    return jsonify({
+        "ok": True,
+        "items": items,
+        "active": {
+            "dataset": manager.ckpt_dataset,
+            "checkpoint": manager.ckpt_path,
+            "info": manager.ckpt_info,
+        },
+    })
+
+
 @app.post("/api/model/load")
 def api_load():
-    ok = manager.load_latest(CHECKPOINTS)
-    return jsonify({"ok": ok, "loaded": manager.model is not None})
+    """Load a saved checkpoint.
+
+    Body (all optional):
+        {"dataset": "stl10"}  -> load checkpoints/stl10/latest.pt
+        {}                     -> best-effort latest
+    """
+    data = request.get_json(silent=True) or {}
+    dataset = data.get("dataset")
+    if dataset:
+        path = _checkpoint_path(CHECKPOINTS, dataset)
+        ok = manager.load_checkpoint(path, dataset)
+    else:
+        ok = manager.load_latest(CHECKPOINTS)
+    return jsonify({
+        "ok": ok,
+        "loaded": manager.model is not None,
+        "dataset": manager.ckpt_dataset,
+        "checkpoint": manager.ckpt_path,
+        "info": manager.ckpt_info,
+    })
 
 
 @app.get("/api/model/info")
 def api_info():
     info = {"loaded": manager.model is not None,
             "checkpoint": manager.ckpt_path,
+            "dataset": manager.ckpt_dataset,
+            "checkpoint_info": manager.ckpt_info,
             "device_info": _device_info(manager.device)}
     arch = _build_arch(manager.model)
     if arch is not None:

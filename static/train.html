@@ -20,6 +20,8 @@
           text-transform:uppercase; letter-spacing:.06em; }
   input, select { width:100%; background:#10131a; color:#e8e8ec; border:1px solid #2a3142;
                   padding:.5rem .6rem; border-radius:8px; font-size:.95rem; margin-top:.25rem; }
+  input[type="checkbox"] { width:auto; margin-top:0; padding:0; flex:0 0 auto;
+                           width:16px; height:16px; accent-color:#4f8c5e; cursor:pointer; }
   button { margin-top:1rem; padding:.7rem 1.1rem; font-weight:600; border:none;
            border-radius:9px; cursor:pointer; font-size:.95rem; }
   .start { background:#4f8c5e; color:white; }   .start:hover{ background:#5fa572; }
@@ -70,9 +72,10 @@
   .arch-empty { position:absolute; inset:0; display:flex; align-items:center;
                 justify-content:center; color:#6c768a; font-size:.9rem;
                 pointer-events:none; }
-  .lat-bars { display:grid; grid-template-columns: repeat(6, 1fr);
+  /* 自下而上：z₆（上爻）在左，z₁（初爻）在右，与卦象阅读顺序一致 */
+  .lat-bars { display:grid; grid-template-columns: repeat(6, 1fr); direction:rtl;
               gap:6px; margin-top:.6rem; }
-  .lat-cell { background:#10131a; border-radius:6px; padding:.45rem .25rem;
+  .lat-cell { direction:ltr; background:#10131a; border-radius:6px; padding:.45rem .25rem;
               text-align:center; font-size:.72rem; color:#9aa3b3;
               border:1px solid #2a3142; position:relative; }
   .lat-cell .v { display:block; font-family: "Consolas", monospace;
@@ -105,7 +108,7 @@
     <label>批大小 (Batch size)</label><input id="batch_size" type="number" value="128" min="8" />
     <label>学习率 (Learning rate)</label><input id="lr" type="number" step="0.0001" value="0.001" />
     <label>β（KL 权重）</label><input id="beta" type="number" step="0.5" value="4" />
-    <label>隐藏通道数 (Hidden)</label><input id="hidden" type="number" value="64" />
+    <label>隐藏通道数 (Hidden)</label><input id="hidden" type="number" value="128" />
     <label>图像尺寸 (Image size)</label><input id="image_size" type="number" value="64" />
     <label>计算设备 (Device)</label>
     <select id="device">
@@ -113,9 +116,13 @@
       <option value="cuda">cuda（GPU）</option>
       <option value="cpu">cpu</option>
     </select>
+    <label style="display:flex; align-items:center; gap:.4rem; margin-top:.7rem; text-transform:none; letter-spacing:0;">
+      <input type="checkbox" id="resume" /> 从已有检查点继续训练 (resume)
+    </label>
     <div>
       <button class="start" id="btnStart">开始训练</button>
       <button class="stop"  id="btnStop">停止</button>
+      <button class="secondary" id="btnResetParams" title="恢复当前数据集的默认超参数">重置为默认</button>
     </div>
   </div>
 
@@ -131,10 +138,24 @@
     <div class="stat"><span>总损失 (Loss)</span><span id="s_loss">—</span></div>
     <div class="stat"><span>重构损失 (Recon)</span><span id="s_recon">—</span></div>
     <div class="stat"><span>KL 散度 (KLD)</span><span id="s_kld">—</span></div>
+    <div class="stat"><span>模型参数 (Params)</span><span id="s_params">—</span></div>
     <div class="progress"><div id="bar"></div></div>
     <div class="msg" id="hint">就绪。</div>
     <canvas id="chart" style="margin-top:1rem"></canvas>
   </div>
+</div>
+
+<div class="card" style="margin-top:1.2rem">
+  <h3 style="margin-top:0; display:flex; justify-content:space-between; align-items:center;">
+    <span>检查点 (Checkpoints)</span>
+    <button class="secondary" id="btnRefreshCkpt" style="margin:0; padding:.35rem .8rem; font-size:.8rem;">刷新</button>
+  </h3>
+  <p style="color:#9aa3b3; font-size:.85rem; margin:.2rem 0 .6rem; line-height:1.7;">
+    每个数据集独立保存到 <code>checkpoints/&lt;dataset&gt;/latest.pt</code>，
+    并附带 <code>info.json</code> 记录训练进度。可以随时切换、暂停或继续训练。
+  </p>
+  <div id="ckptList" style="display:grid; gap:.6rem; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));"></div>
+  <div id="ckptActive" style="margin-top:.9rem; font-size:.85rem; color:#9aa3b3;"></div>
 </div>
 
 <div class="card" style="margin-top:1.2rem">
@@ -147,6 +168,14 @@
     <span style="color:#5fa572">绿</span>=解码器。
     鼠标拖动旋转，悬停层片查看张量形状。
   </p>
+  <div style="display:flex; align-items:center; gap:.7rem; margin:.4rem 0 .8rem;
+              font-size:.85rem; color:#9aa3b3;">
+    <label for="previewFps">输出图像采样率：</label>
+    <input type="range" id="previewFps" min="1" max="30" step="1" value="2"
+           style="flex:1; max-width:280px; accent-color:#5fa572;" />
+    <span id="previewFpsVal" style="font-family:Consolas,monospace; color:#d7c98a;">2 FPS</span>
+    <span style="color:#6c768a;">（限制网络帧率，与 3D 渲染帧率无关）</span>
+  </div>
   <div class="arch3d-wrap">
     <canvas id="arch3d"></canvas>
     <div id="archTip"></div>
@@ -163,12 +192,17 @@
 <script>
 const $ = id => document.getElementById(id);
 
+// Per-dataset reasonable defaults. Tuned for the kind of imagery each set
+// contains: STL-10 / CIFAR-10 are 3-channel photos (need bigger model, higher
+// β to keep KL meaningful at 64px); MNIST / FashionMNIST are tiny grayscale
+// digits/clothes that converge fast at 28px with a smaller model.
 const DATASET_DEFAULTS = {
-  stl10: { image_size: 64, batch_size: 128 },
-  cifar10: { image_size: 64, batch_size: 128 },
-  mnist: { image_size: 28, batch_size: 128 },
-  fashion: { image_size: 28, batch_size: 128 },
+  stl10:   { epochs: 20, batch_size: 128, lr: 0.001, beta: 4,   hidden: 128, image_size: 64 },
+  cifar10: { epochs: 30, batch_size: 128, lr: 0.001, beta: 4,   hidden: 128, image_size: 64 },
+  mnist:   { epochs: 15, batch_size: 256, lr: 0.001, beta: 1,   hidden: 32,  image_size: 28 },
+  fashion: { epochs: 20, batch_size: 256, lr: 0.001, beta: 1.5, hidden: 32,  image_size: 28 },
 };
+const DATASET_PARAM_KEYS = ['epochs','batch_size','lr','beta','hidden','image_size'];
 
 const STATE_TEXT = {
   'idle': '空闲', 'starting': '启动中', 'loading data': '加载数据中',
@@ -194,11 +228,17 @@ function setDatasetStatus(text, available) {
 function applyDatasetDefaults() {
   const defaults = DATASET_DEFAULTS[$('dataset').value];
   if (!defaults) return;
-  $('image_size').value = defaults.image_size;
-  $('batch_size').value = defaults.batch_size;
+  for (const k of DATASET_PARAM_KEYS) {
+    if (defaults[k] != null) $(k === 'lr' ? 'lr' : k).value = defaults[k];
+  }
   $('s_dataset').textContent = $('dataset').value;
   localStorage.setItem('yijingvae.dataset', $('dataset').value);
   refreshDatasetAvailability();
+}
+
+function resetParamsToDefaults() {
+  applyDatasetDefaults();
+  $('hint').textContent = `已重置为 ${$('dataset').value} 的默认超参数。`;
 }
 
 function restoreDatasetChoice() {
@@ -207,6 +247,30 @@ function restoreDatasetChoice() {
     $('dataset').value = saved;
     applyDatasetDefaults();
   }
+}
+
+// When the user picks a different dataset, load that dataset's checkpoint
+// (if any) so the live state panel, architecture view and latent display all
+// reflect the new selection instead of whichever model was previously active.
+// Skipped while a training job is running.
+async function loadDatasetCheckpointSilently(ds) {
+  try {
+    const sr = await fetch('/api/train/state');
+    const s  = await sr.json();
+    const busy = s && s.message && !['idle','finished','stopped','error'].includes(s.message);
+    if (busy) return;
+    const r = await fetch('/api/model/load', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({dataset: ds})});
+    const j = await r.json();
+    if (j.loaded) {
+      $('hint').textContent = `已切换到 ${ds} 的权重。`;
+    } else {
+      $('hint').textContent = `${ds} 还没有已保存的权重，开始训练即可生成。`;
+    }
+    refreshCheckpoints();
+    poll();
+  } catch (e) { /* ignore */ }
 }
 
 async function refreshDatasetAvailability() {
@@ -278,11 +342,12 @@ async function start() {
     hidden:  +$('hidden').value,
     image_size: +$('image_size').value,
     device:  $('device').value,
+    resume:  $('resume').checked,
   };
   const r = await fetch('/api/train/start', {method:'POST',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   const j = await r.json();
-  $('hint').textContent = j.ok ? '训练已启动。' : (j.error || '已有任务在运行。');
+  $('hint').textContent = j.ok ? (body.resume ? '已请求继续训练。' : '训练已启动。') : (j.error || '已有任务在运行。');
 }
 async function stop() {
   const r = await fetch('/api/train/stop', {method:'POST'});
@@ -291,12 +356,103 @@ async function stop() {
 }
 $('btnStart').onclick = start;
 $('btnStop').onclick  = stop;
+$('btnResetParams').onclick = resetParamsToDefaults;
 $('btnCheckDataset').onclick = refreshDatasetAvailability;
 $('btnDownloadDataset').onclick = downloadDataset;
-$('dataset').onchange = applyDatasetDefaults;
+$('btnRefreshCkpt').onclick = () => refreshCheckpoints();
+$('dataset').onchange = () => {
+  applyDatasetDefaults();
+  refreshCheckpoints();
+  loadDatasetCheckpointSilently($('dataset').value);
+};
 restoreDatasetChoice();
 refreshDatasetAvailability();
 pollDatasetDownload();
+refreshCheckpoints();
+
+// ---------- checkpoint panel ----------
+function fmtNum(v, d=3) {
+  return (v == null || isNaN(v)) ? '—' : (+v).toFixed(d);
+}
+async function refreshCheckpoints() {
+  try {
+    const r = await fetch('/api/checkpoints');
+    const j = await r.json();
+    renderCheckpoints(j.items || [], j.active || {});
+  } catch (e) { /* ignore */ }
+}
+function renderCheckpoints(items, active) {
+  const host = $('ckptList');
+  host.innerHTML = '';
+  if (!items.length) {
+    host.innerHTML = '<div style="color:#9aa3b3; font-size:.85rem;">还没有任何已保存的检查点。开始一次训练即可生成。</div>';
+  }
+  const activeKey = active && active.checkpoint;
+  for (const it of items) {
+    const info = it.info || {};
+    const isActive = activeKey && info.checkpoint === activeKey;
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#10131a; border:1px solid ' + (isActive ? '#5fa572' : '#2a3142') +
+                         '; border-radius:10px; padding:.75rem .85rem; font-size:.82rem;';
+    const ds = info.dataset || it.dataset;
+    const epochs = info.epochs_completed != null ? info.epochs_completed : '?';
+    const planned = info.epochs_planned != null ? info.epochs_planned : '?';
+    const last = info.last_loss != null ? fmtNum(info.last_loss) : '—';
+    const updated = info.updated_at || info.loaded_at || '—';
+    const cfg = info.config || {};
+    card.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:.35rem;">
+        <b style="color:#d7c98a; font-size:.95rem;">${ds}</b>
+        ${isActive ? '<span style="color:#5fa572; font-size:.7rem;">● 当前</span>' : ''}
+      </div>
+      <div style="color:#9aa3b3;">轮数 ${epochs} / 计划 ${planned}</div>
+      <div style="color:#9aa3b3;">最近损失 <span style="color:#e8e8ec; font-family:Consolas,monospace;">${last}</span></div>
+      <div style="color:#9aa3b3;">β=${info.beta ?? cfg.beta ?? '—'} · hidden=${info.hidden ?? cfg.hidden ?? '—'} · ${info.image_size ?? cfg.image_size ?? '—'}px</div>
+      <div style="color:#6c768a; font-size:.72rem; margin-top:.3rem;">${updated}</div>
+      <div style="margin-top:.5rem; display:flex; gap:.4rem; flex-wrap:wrap;">
+        <button class="secondary" data-act="select"  data-ds="${ds}" style="margin:0; padding:.3rem .6rem; font-size:.75rem;">选择</button>
+        <button class="secondary" data-act="resume"  data-ds="${ds}" style="margin:0; padding:.3rem .6rem; font-size:.75rem;">继续训练</button>
+        <button class="secondary" data-act="load"    data-ds="${ds}" style="margin:0; padding:.3rem .6rem; font-size:.75rem;">载入</button>
+      </div>`;
+    host.appendChild(card);
+  }
+  host.querySelectorAll('button[data-act]').forEach(b => {
+    b.onclick = () => onCheckpointAction(b.dataset.act, b.dataset.ds);
+  });
+  // active summary line
+  const a = $('ckptActive');
+  if (active && active.dataset) {
+    const info = active.info || {};
+    a.innerHTML = `当前已载入：<b style="color:#d7c98a;">${active.dataset}</b>` +
+                  ` · 轮数 ${info.epochs_completed ?? '?'} · 损失 ${fmtNum(info.last_loss)}` +
+                  ` · <code style="color:#7d8a9c;">${active.checkpoint || ''}</code>`;
+  } else {
+    a.innerHTML = '当前未载入任何检查点。';
+  }
+}
+async function onCheckpointAction(act, ds) {
+  if (DATASET_DEFAULTS[ds]) {
+    $('dataset').value = ds;
+    applyDatasetDefaults();
+  }
+  if (act === 'select') {
+    $('hint').textContent = `已选中数据集 ${ds}。`;
+    return;
+  }
+  if (act === 'load') {
+    $('hint').textContent = `载入 ${ds} 的权重…`;
+    const r = await fetch('/api/model/load', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({dataset: ds})});
+    const j = await r.json();
+    $('hint').textContent = j.loaded ? `${ds} 权重已载入。` : '载入失败。';
+    refreshCheckpoints();
+    return;
+  }
+  if (act === 'resume') {
+    $('resume').checked = true;
+    $('hint').textContent = `准备继续训练 ${ds}（再 ${$('epochs').value} 轮）。点击「开始训练」启动。`;
+  }
+}
 
 // chart
 const cv = $('chart'), ctx = cv.getContext('2d');
@@ -355,7 +511,14 @@ async function poll() {
     const r = await fetch('/api/train/state');
     const s = await r.json();
     $('s_msg').textContent   = STATE_TEXT[s.message] || s.message;
-    $('s_dataset').textContent = s.config && s.config.dataset ? s.config.dataset : $('dataset').value;
+    // While a training job is active, show its config dataset; otherwise just
+    // mirror the user's selection so changing the dropdown updates this row
+    // immediately, even when no checkpoint exists yet for the new dataset.
+    const training = s.message && !['idle','finished','stopped','error'].includes(s.message);
+    const dsLabel = (training && s.config && s.config.dataset)
+        ? s.config.dataset
+        : $('dataset').value;
+    $('s_dataset').textContent = dsLabel || '—';
     $('s_epoch').textContent = `${s.epoch} / ${s.total_epochs}`;
     $('s_step').textContent  = `${s.step} / ${s.steps_per_epoch}`;
     $('s_loss').textContent  = s.loss ? s.loss.toFixed(3) : '—';
@@ -370,8 +533,37 @@ async function poll() {
     drawChart(lastHistory);
     updateDevice(s.device_info);
     if (window.updateArch3D) window.updateArch3D(s.arch, +($('batch_size').value) || null);
+    updateParamCount(s.arch && s.arch.param_counts);
+    if (s.sample_image && window.setOutputImage3D) window.setOutputImage3D(s.sample_image);
+    if (s.input_image  && window.setInputImage3D)  window.setInputImage3D(s.input_image);
+    syncPreviewFpsFromState(s.preview_fps);
     renderLatent(s.latent_mu, s.latent_logvar);
+    // refresh checkpoint list whenever an epoch completes
+    if (s.epoch !== lastEpochSeen) {
+      lastEpochSeen = s.epoch;
+      refreshCheckpoints();
+    }
   } catch (e) { /* ignore */ }
+}
+let lastEpochSeen = -1;
+
+function formatParamCount(n) {
+  if (n == null || isNaN(n)) return '—';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + ' M (' + n.toLocaleString() + ')';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + ' K (' + n.toLocaleString() + ')';
+  return n.toLocaleString();
+}
+function updateParamCount(pc) {
+  if (!pc) { $('s_params').textContent = '—'; return; }
+  let txt = formatParamCount(pc.total);
+  if (pc.encoder != null && pc.decoder != null) {
+    txt += ` · enc ${formatParamCount(pc.encoder).split(' (')[0]}`;
+    txt += ` · dec ${formatParamCount(pc.decoder).split(' (')[0]}`;
+  }
+  $('s_params').textContent = txt;
+  $('s_params').title = `total ${pc.total?.toLocaleString?.() ?? pc.total}`
+    + (pc.encoder != null ? ` · encoder ${pc.encoder.toLocaleString()}` : '')
+    + (pc.decoder != null ? ` · decoder ${pc.decoder.toLocaleString()}` : '');
 }
 
 function renderLatent(mu, logvar) {
@@ -396,6 +588,36 @@ function renderLatent(mu, logvar) {
     host.appendChild(cell);
   }
 }
+
+// Preview-FPS slider (controls how often the training loop emits a sample
+// image — independent of the 3D viz render rate).
+let previewFpsDirty = false;
+let previewFpsTimer = null;
+function applyPreviewFpsLabel(v) {
+  $('previewFpsVal').textContent = v + ' FPS';
+}
+$('previewFps').addEventListener('input', e => {
+  const v = +e.target.value;
+  applyPreviewFpsLabel(v);
+  previewFpsDirty = true;
+  clearTimeout(previewFpsTimer);
+  previewFpsTimer = setTimeout(() => {
+    fetch('/api/train/preview_fps', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({fps: v}),
+    }).finally(() => { previewFpsDirty = false; });
+  }, 150);
+});
+function syncPreviewFpsFromState(fps) {
+  if (!fps || previewFpsDirty) return;
+  const cur = +$('previewFps').value;
+  const v = Math.round(fps);
+  if (cur !== v) {
+    $('previewFps').value = v;
+    applyPreviewFpsLabel(v);
+  }
+}
+
 setInterval(poll, 800); poll();
 </script>
 <script type="importmap">
@@ -408,7 +630,9 @@ const viz = createArchViz({
   tip:    document.getElementById('archTip'),
   empty:  document.getElementById('archEmpty'),
 });
-window.updateArch3D = viz.update;
+window.updateArch3D    = viz.update;
+window.setOutputImage3D = viz.setOutputImage;
+window.setInputImage3D  = viz.setInputImage;
 </script>
 </body>
 </html>

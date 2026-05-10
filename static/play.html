@@ -17,9 +17,11 @@
   @media (max-width: 820px) { .wrap { grid-template-columns:1fr; } }
   .card { background:#1b1f2a; border-radius:14px; padding:1.4rem 1.6rem;
           box-shadow:0 4px 18px rgba(0,0,0,.4); }
+  /* 卦象自下而上：六爻滑块以倒序显示，上爻在上、初爻在下 */
+  #yaos { display:flex; flex-direction:column-reverse; }
   .yao-row { display:grid; grid-template-columns: 90px 1fr 60px; align-items:center;
              gap:.8rem; padding:.55rem 0; border-bottom:1px dashed #2a3142; }
-  .yao-row:last-child { border:none; }
+  .yao-row:first-child { border:none; }
   .yao-name { font-weight:600; color:#d7c98a; }
   .yao-value { font-variant-numeric: tabular-nums; text-align:right; color:#9aa3b3; }
   input[type=range] { width:100%; accent-color:#5fa572; }
@@ -60,9 +62,10 @@
   .arch-empty { position:absolute; inset:0; display:flex; align-items:center;
                 justify-content:center; color:#6c768a; font-size:.9rem;
                 pointer-events:none; }
-  .lat-bars { display:grid; grid-template-columns: repeat(6, 1fr);
+  /* 自下而上：z₆（上爻）在左，z₁（初爻）在右，与卦象阅读顺序一致 */
+  .lat-bars { display:grid; grid-template-columns: repeat(6, 1fr); direction:rtl;
               gap:4px; margin-top:.5rem; }
-  .lat-cell { background:#10131a; border-radius:6px; padding:.3rem .15rem;
+  .lat-cell { direction:ltr; background:#10131a; border-radius:6px; padding:.3rem .15rem;
               text-align:center; font-size:.7rem; color:#9aa3b3;
               border:1px solid #2a3142; }
   .lat-cell .v { display:block; font-family: "Consolas", monospace;
@@ -90,6 +93,12 @@
         <input type="checkbox" id="live" checked /> 实时更新
       </label>
     </div>
+    <div style="margin-top:.9rem; display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
+      <label style="font-size:.8rem; color:#9aa3b3; margin:0;">模型权重</label>
+      <select id="ckptSel" style="flex:1; min-width:160px; background:#10131a; color:#e8e8ec; border:1px solid #2a3142; padding:.45rem .55rem; border-radius:8px;"></select>
+      <button class="alt" id="btnLoadCkpt" style="margin:0;">载入</button>
+    </div>
+    <div id="ckptStats" style="margin-top:.5rem; font-size:.78rem; color:#9aa3b3; line-height:1.6;"></div>
     <div class="hex-art" id="hexArt"></div>
     <div class="msg" id="status">…</div>
   </div>
@@ -216,6 +225,7 @@ async function requestDecode() {
     const j = await r.json();
     if (j.ok) {
       $('img').src = j.image;
+      if (window.setOutputImage3D) window.setOutputImage3D(j.image);
       $('zText').textContent = 'z = [' + z.map(v=>v.toFixed(2)).join(', ') + ']';
       $('status').textContent = '';
     } else {
@@ -240,11 +250,72 @@ $('btnRandom').onclick = () => {
 $('btnZero').onclick   = () => { setZ([0,0,0,0,0,0]); requestDecode(); };
 $('btnReload').onclick = async () => {
   $('status').textContent = '正在重新载入模型…';
-  const r = await fetch('/api/model/load', {method:'POST'});
+  const r = await fetch('/api/model/load', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:'{}'});
   const j = await r.json();
   $('status').textContent = j.loaded ? '模型已载入' : '没有可用的模型权重';
   if (j.loaded) { await refreshInfo(); requestDecode(); }
+  await refreshCheckpoints();
 };
+
+$('btnLoadCkpt').onclick = async () => {
+  const ds = $('ckptSel').value;
+  if (!ds) return;
+  $('status').textContent = `载入 ${ds} 权重…`;
+  const r = await fetch('/api/model/load', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({dataset: ds})});
+  const j = await r.json();
+  $('status').textContent = j.loaded ? `${ds} 模型已载入` : `载入 ${ds} 失败`;
+  if (j.loaded) { await refreshInfo(); requestDecode(); }
+  await refreshCheckpoints();
+};
+
+function fmtNum(v, d=3) { return (v == null || isNaN(v)) ? '—' : (+v).toFixed(d); }
+
+async function refreshCheckpoints() {
+  try {
+    const r = await fetch('/api/checkpoints');
+    const j = await r.json();
+    const sel = $('ckptSel');
+    const prev = sel.value;
+    sel.innerHTML = '';
+    const items = j.items || [];
+    if (!items.length) {
+      const opt = document.createElement('option');
+      opt.value = ''; opt.textContent = '（还没有保存的权重）';
+      sel.appendChild(opt);
+    }
+    for (const it of items) {
+      const opt = document.createElement('option');
+      opt.value = it.dataset;
+      const ep = it.info && it.info.epochs_completed != null ? it.info.epochs_completed : '?';
+      const loss = it.info && it.info.last_loss != null ? fmtNum(it.info.last_loss) : '—';
+      opt.textContent = `${it.dataset}  ·  ep ${ep}  ·  loss ${loss}`;
+      sel.appendChild(opt);
+    }
+    const active = j.active || {};
+    if (active.dataset) sel.value = active.dataset;
+    else if (prev) sel.value = prev;
+    renderCkptStats(active);
+  } catch (e) { /* ignore */ }
+}
+
+function renderCkptStats(active) {
+  const host = $('ckptStats');
+  if (!active || !active.dataset) {
+    host.innerHTML = '<i>未载入模型</i>';
+    return;
+  }
+  const info = active.info || {};
+  const cfg = info.config || {};
+  host.innerHTML = `
+    <div>数据集：<b style="color:#d7c98a;">${active.dataset}</b></div>
+    <div>训练进度：${info.epochs_completed ?? '?'} 轮 · 损失 ${fmtNum(info.last_loss)}
+         (recon ${fmtNum(info.last_recon)} · KLD ${fmtNum(info.last_kld)})</div>
+    <div>超参：β=${info.beta ?? cfg.beta ?? '—'} · hidden=${info.hidden ?? cfg.hidden ?? '—'}
+         · 尺寸 ${info.image_size ?? cfg.image_size ?? '—'}px</div>
+    <div style="color:#6c768a;">更新：${info.updated_at || info.loaded_at || '—'}</div>`;
+}
 
 async function refreshInfo() {
   try {
@@ -252,9 +323,11 @@ async function refreshInfo() {
     const j = await r.json();
     if (j.loaded) {
       renderArch(j.arch);
+      renderCkptStats({dataset: j.dataset, checkpoint: j.checkpoint, info: j.checkpoint_info || {}});
       return true;
     } else {
       renderArch(null);
+      renderCkptStats({});
       return false;
     }
   } catch (e) { return false; }
@@ -264,6 +337,7 @@ buildSliders();
 drawHex();
 drawLatentBars();
 (async () => {
+  await refreshCheckpoints();
   const ok = await refreshInfo();
   if (ok) requestDecode();
   else $('status').textContent =
@@ -279,10 +353,15 @@ const viz = createArchViz({
   canvas: document.getElementById('arch3d'),
   tip:    document.getElementById('archTip'),
   empty:  document.getElementById('archEmpty'),
+  // 推演模式只用解码器 — 把输入及编码器淡化，保留潜变量、解码器与输出图像
+  dimOf: (i, n, role) => role === 'enc' || i === 0,
 });
-window.updateArch3D = viz.update;
+window.updateArch3D    = viz.update;
+window.setOutputImage3D = viz.setOutputImage;
 // If refreshInfo() ran before this module loaded, re-trigger once.
 if (window.__lastArch !== undefined) viz.update(window.__lastArch, 1);
+const _img = document.getElementById('img');
+if (_img && _img.src) viz.setOutputImage(_img.src);
 </script>
 </body>
 </html>
