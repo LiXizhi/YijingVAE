@@ -1,13 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>Train · Yijing β-VAE</title>
+<title>训练 · 易经 β-VAE</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { font-family: system-ui, sans-serif; background:#11141a; color:#e8e8ec;
+  body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+         background:#11141a; color:#e8e8ec;
          margin:0; padding:1.5rem; }
   h1 { margin:0 0 1rem; font-weight:600; }
   .grid { display:grid; gap:1.2rem;
@@ -24,65 +25,248 @@
   .start { background:#4f8c5e; color:white; }   .start:hover{ background:#5fa572; }
   .stop  { background:#9c4d4d; color:white; margin-left:.5rem; }
   .stop:hover { background:#b76060; }
+  .secondary { background:#3a4a78; color:white; }
+  .secondary:hover { background:#4f63a0; }
+  button:disabled { opacity:.55; cursor:not-allowed; }
   .stat { display:flex; justify-content:space-between; padding:.3rem 0;
           border-bottom:1px dashed #2a3142; font-variant-numeric:tabular-nums; }
   .stat:last-child { border:none; }
   .msg { color:#d7c98a; font-style:italic; margin-top:.6rem; }
-  canvas { width:100%; height:260px; background:#10131a; border-radius:10px; }
+  canvas { display:block; background:#10131a; border-radius:10px; }
+  #chart { width:100%; height:220px; }
   nav a { color:#8ab1ff; margin-right:1rem; text-decoration:none; }
   .progress { width:100%; height:8px; background:#10131a; border-radius:6px; overflow:hidden;
               margin-top:.6rem; }
   .progress > div { height:100%; background:linear-gradient(90deg,#3a4a78,#5fa572); width:0; }
+
+  .device-pill { display:inline-flex; align-items:center; gap:.4rem;
+                 padding:.15rem .55rem; border-radius:999px;
+                 background:#10131a; border:1px solid #2a3142;
+                 font-size:.78rem; color:#d7c98a;
+                 font-family:"Consolas", monospace; }
+  .device-pill.cpu { color:#8ab1ff; border-color:#3a4a78; }
+  .device-pill.cuda { color:#5fa572; border-color:#3a6a4a; }
+  .device-pill .dot { width:.5rem; height:.5rem; border-radius:50%;
+                      background:currentColor; box-shadow:0 0 6px currentColor; }
+
+  /* 3D 网络结构可视化 */
+  .arch3d-wrap { position:relative; margin-top:.8rem; }
+  #arch3d { width:100%; height:420px; display:block;
+            background:radial-gradient(ellipse at center, #161a24 0%, #0c0e14 100%);
+            border-radius:12px; cursor:grab; }
+  #arch3d:active { cursor:grabbing; }
+  #archTip { position:absolute; pointer-events:none;
+             background:rgba(20,24,34,.96); color:#e8e8ec;
+             border:1px solid #3a4a78; border-radius:8px;
+             padding:.5rem .7rem; font-size:.82rem;
+             box-shadow:0 4px 14px rgba(0,0,0,.5);
+             transform:translate(-50%, calc(-100% - 12px));
+             white-space:nowrap; opacity:0; transition:opacity .12s;
+             z-index:10; }
+  #archTip .t  { color:#d7c98a; font-weight:600; }
+  #archTip .s  { color:#9aa3b3; font-family:"Consolas", monospace;
+                 font-size:.78rem; margin-top:.2rem; }
+  #archTip .n  { color:#9aa3b3; font-size:.75rem; margin-top:.2rem; }
+  .arch-empty { position:absolute; inset:0; display:flex; align-items:center;
+                justify-content:center; color:#6c768a; font-size:.9rem;
+                pointer-events:none; }
+  .lat-bars { display:grid; grid-template-columns: repeat(6, 1fr);
+              gap:6px; margin-top:.6rem; }
+  .lat-cell { background:#10131a; border-radius:6px; padding:.45rem .25rem;
+              text-align:center; font-size:.72rem; color:#9aa3b3;
+              border:1px solid #2a3142; position:relative; }
+  .lat-cell .v { display:block; font-family: "Consolas", monospace;
+                 color:#d7c98a; font-weight:600; font-size:.9rem;
+                 margin-top:.2rem; font-variant-numeric: tabular-nums; }
+  .lat-cell .lv { display:block; color:#7d8a9c; font-size:.65rem;
+                  margin-top:.15rem; font-family:"Consolas", monospace; }
 </style>
 </head>
 <body>
-<nav><a href="/">← Home</a><a href="/play">Play →</a></nav>
-<h1>Train the Yijing β-VAE</h1>
+<nav><a href="/">← 首页</a><a href="/play">推演 →</a></nav>
+<h1>训练 易经 β-VAE</h1>
 
 <div class="grid">
   <div class="card">
-    <h3 style="margin-top:0">Hyper-parameters</h3>
-    <label>Dataset</label>
+    <h3 style="margin-top:0">超参数</h3>
+    <label>数据集 (Dataset)</label>
     <select id="dataset">
-      <option value="stl10" selected>STL-10 (64×64 RGB photos, 100k unlabeled)</option>
-      <option value="cifar10">CIFAR-10 (resized to 64×64)</option>
-      <option value="mnist">MNIST (28×28 digits)</option>
-      <option value="fashion">FashionMNIST (28×28)</option>
+      <option value="stl10" selected>STL-10（64×64 彩色照片，10 万张未标注）</option>
+      <option value="cifar10">CIFAR-10（缩放至 64×64）</option>
+      <option value="mnist">MNIST（28×28 手写数字）</option>
+      <option value="fashion">FashionMNIST（28×28 服饰）</option>
     </select>
-    <label>Epochs</label><input id="epochs" type="number" value="20" min="1" />
-    <label>Batch size</label><input id="batch_size" type="number" value="128" min="8" />
-    <label>Learning rate</label><input id="lr" type="number" step="0.0001" value="0.001" />
-    <label>β (KL weight)</label><input id="beta" type="number" step="0.5" value="4" />
-    <label>Hidden channels</label><input id="hidden" type="number" value="64" />
-    <label>Image size</label><input id="image_size" type="number" value="64" />
-    <label>Device</label>
+    <div class="stat" style="margin-top:.7rem"><span>数据状态</span><span id="dataset_status">检查中…</span></div>
+    <div>
+      <button class="secondary" id="btnCheckDataset">检查数据集</button>
+      <button class="secondary" id="btnDownloadDataset">下载数据集</button>
+    </div>
+    <label>训练轮数 (Epochs)</label><input id="epochs" type="number" value="20" min="1" />
+    <label>批大小 (Batch size)</label><input id="batch_size" type="number" value="128" min="8" />
+    <label>学习率 (Learning rate)</label><input id="lr" type="number" step="0.0001" value="0.001" />
+    <label>β（KL 权重）</label><input id="beta" type="number" step="0.5" value="4" />
+    <label>隐藏通道数 (Hidden)</label><input id="hidden" type="number" value="64" />
+    <label>图像尺寸 (Image size)</label><input id="image_size" type="number" value="64" />
+    <label>计算设备 (Device)</label>
     <select id="device">
-      <option value="cuda" selected>cuda (GPU)</option>
-      <option value="auto">auto</option>
+      <option value="auto" selected>auto（自动）</option>
+      <option value="cuda">cuda（GPU）</option>
       <option value="cpu">cpu</option>
     </select>
     <div>
-      <button class="start" id="btnStart">Start</button>
-      <button class="stop"  id="btnStop">Stop</button>
+      <button class="start" id="btnStart">开始训练</button>
+      <button class="stop"  id="btnStop">停止</button>
     </div>
   </div>
 
   <div class="card">
-    <h3 style="margin-top:0">Live status</h3>
-    <div class="stat"><span>State</span><span id="s_msg">—</span></div>
-    <div class="stat"><span>Epoch</span><span id="s_epoch">0 / 0</span></div>
-    <div class="stat"><span>Step</span><span id="s_step">0 / 0</span></div>
-    <div class="stat"><span>Loss</span><span id="s_loss">—</span></div>
-    <div class="stat"><span>Recon</span><span id="s_recon">—</span></div>
-    <div class="stat"><span>KLD</span><span id="s_kld">—</span></div>
+    <h3 style="margin-top:0; display:flex; justify-content:space-between; align-items:center;">
+      <span>实时状态</span>
+      <span id="devicePill" class="device-pill"><span class="dot"></span><span id="deviceLabel">检测中…</span></span>
+    </h3>
+    <div class="stat"><span>状态</span><span id="s_msg">—</span></div>
+    <div class="stat"><span>数据集 (Dataset)</span><span id="s_dataset">—</span></div>
+    <div class="stat"><span>轮数 (Epoch)</span><span id="s_epoch">0 / 0</span></div>
+    <div class="stat"><span>步数 (Step)</span><span id="s_step">0 / 0</span></div>
+    <div class="stat"><span>总损失 (Loss)</span><span id="s_loss">—</span></div>
+    <div class="stat"><span>重构损失 (Recon)</span><span id="s_recon">—</span></div>
+    <div class="stat"><span>KL 散度 (KLD)</span><span id="s_kld">—</span></div>
     <div class="progress"><div id="bar"></div></div>
-    <div class="msg" id="hint">Ready.</div>
-    <canvas id="chart" width="600" height="260" style="margin-top:1rem"></canvas>
+    <div class="msg" id="hint">就绪。</div>
+    <canvas id="chart" style="margin-top:1rem"></canvas>
+  </div>
+</div>
+
+<div class="card" style="margin-top:1.2rem">
+  <h3 style="margin-top:0">网络结构与潜变量实时可视化</h3>
+  <p style="color:#9aa3b3; font-size:.85rem; margin:.2rem 0 .6rem; line-height:1.7;">
+    输入 / 输出皆为二维图像，编码器逐步压缩为 6 维潜向量后再由解码器还原，
+    侧视形成 <b style="color:#d7c98a">X 形</b> 漏斗结构。
+    <span style="color:#5b86c4">蓝</span>=编码器，
+    <span style="color:#d7c98a">金</span>=六爻潜变量，
+    <span style="color:#5fa572">绿</span>=解码器。
+    鼠标拖动旋转，悬停层片查看张量形状。
+  </p>
+  <div class="arch3d-wrap">
+    <canvas id="arch3d"></canvas>
+    <div id="archTip"></div>
+    <div class="arch-empty" id="archEmpty">模型尚未创建。请先启动训练或在「推演」页载入模型。</div>
+  </div>
+  <div style="margin-top:1rem; font-size:.78rem; color:#9aa3b3; text-transform:uppercase; letter-spacing:.06em;">
+    六爻潜向量 z（最近一批的均值 μ）
+  </div>
+  <div class="lat-bars" id="latBars">
+    <div style="grid-column:1/-1; color:#9aa3b3; font-size:.85rem;">尚无潜变量样本。</div>
   </div>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
+
+const DATASET_DEFAULTS = {
+  stl10: { image_size: 64, batch_size: 128 },
+  cifar10: { image_size: 64, batch_size: 128 },
+  mnist: { image_size: 28, batch_size: 128 },
+  fashion: { image_size: 28, batch_size: 128 },
+};
+
+const STATE_TEXT = {
+  'idle': '空闲', 'starting': '启动中', 'loading data': '加载数据中',
+  'building model': '构建模型', 'training': '训练中', 'saving': '保存中',
+  'finished': '已完成', 'stopped': '已停止', 'error': '出错',
+};
+
+const DATASET_STATUS_TEXT = {
+  available: '已下载',
+  missing: '未下载',
+  checking: '检查中…',
+  downloading: '下载中…',
+  error: '检查失败',
+};
+
+let datasetPollTimer = null;
+
+function setDatasetStatus(text, available) {
+  $('dataset_status').textContent = text;
+  $('btnDownloadDataset').disabled = available === true || text === DATASET_STATUS_TEXT.downloading;
+}
+
+function applyDatasetDefaults() {
+  const defaults = DATASET_DEFAULTS[$('dataset').value];
+  if (!defaults) return;
+  $('image_size').value = defaults.image_size;
+  $('batch_size').value = defaults.batch_size;
+  $('s_dataset').textContent = $('dataset').value;
+  localStorage.setItem('yijingvae.dataset', $('dataset').value);
+  refreshDatasetAvailability();
+}
+
+function restoreDatasetChoice() {
+  const saved = localStorage.getItem('yijingvae.dataset');
+  if (saved && DATASET_DEFAULTS[saved]) {
+    $('dataset').value = saved;
+    applyDatasetDefaults();
+  }
+}
+
+async function refreshDatasetAvailability() {
+  const dataset = $('dataset').value;
+  setDatasetStatus(DATASET_STATUS_TEXT.checking, null);
+  try {
+    const r = await fetch(`/api/datasets/${encodeURIComponent(dataset)}`);
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'dataset check failed');
+    setDatasetStatus(j.info.available ? DATASET_STATUS_TEXT.available : DATASET_STATUS_TEXT.missing,
+                     j.info.available);
+    return j.info.available;
+  } catch (e) {
+    setDatasetStatus(DATASET_STATUS_TEXT.error, false);
+    return false;
+  }
+}
+
+async function downloadDataset() {
+  const dataset = $('dataset').value;
+  $('hint').textContent = `正在准备下载 ${dataset}…`;
+  setDatasetStatus(DATASET_STATUS_TEXT.downloading, null);
+  $('btnDownloadDataset').disabled = true;
+  try {
+    const r = await fetch('/api/datasets/download', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({dataset}),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || '下载未启动');
+    pollDatasetDownload();
+  } catch (e) {
+    $('hint').textContent = e.message;
+    await refreshDatasetAvailability();
+  }
+}
+
+async function pollDatasetDownload() {
+  if (datasetPollTimer) clearTimeout(datasetPollTimer);
+  try {
+    const r = await fetch('/api/datasets/download/state');
+    const s = await r.json();
+    if (s.dataset === $('dataset').value) {
+      if (s.running) {
+        setDatasetStatus(DATASET_STATUS_TEXT.downloading, null);
+        $('hint').textContent = s.message || '正在下载数据集…';
+      } else if (s.ok === true || s.available) {
+        setDatasetStatus(DATASET_STATUS_TEXT.available, true);
+        $('hint').textContent = `${s.dataset} 数据集已可用。`;
+      } else if (s.ok === false) {
+        setDatasetStatus(DATASET_STATUS_TEXT.missing, false);
+        $('hint').textContent = s.message || '数据集下载失败。';
+      }
+    }
+    if (s.running) datasetPollTimer = setTimeout(pollDatasetDownload, 1200);
+  } catch (e) {
+    datasetPollTimer = setTimeout(pollDatasetDownload, 2000);
+  }
+}
 
 async function start() {
   const body = {
@@ -98,45 +282,80 @@ async function start() {
   const r = await fetch('/api/train/start', {method:'POST',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   const j = await r.json();
-  $('hint').textContent = j.ok ? 'Training started.' : 'Already running.';
+  $('hint').textContent = j.ok ? '训练已启动。' : (j.error || '已有任务在运行。');
 }
 async function stop() {
   const r = await fetch('/api/train/stop', {method:'POST'});
   const j = await r.json();
-  $('hint').textContent = j.ok ? 'Stop requested.' : 'Not running.';
+  $('hint').textContent = j.ok ? '已请求停止。' : '当前没有训练任务。';
 }
 $('btnStart').onclick = start;
 $('btnStop').onclick  = stop;
+$('btnCheckDataset').onclick = refreshDatasetAvailability;
+$('btnDownloadDataset').onclick = downloadDataset;
+$('dataset').onchange = applyDatasetDefaults;
+restoreDatasetChoice();
+refreshDatasetAvailability();
+pollDatasetDownload();
 
 // chart
 const cv = $('chart'), ctx = cv.getContext('2d');
+function resizeChart() {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = cv.clientWidth || 600;
+  const cssH = cv.clientHeight || 220;
+  if (cv.width !== Math.round(cssW * dpr) || cv.height !== Math.round(cssH * dpr)) {
+    cv.width = Math.round(cssW * dpr);
+    cv.height = Math.round(cssH * dpr);
+  }
+}
 function drawChart(history) {
-  const W = cv.width, H = cv.height, pad = 30;
+  resizeChart();
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.width, H = cv.height, pad = 36 * dpr;
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle = '#10131a'; ctx.fillRect(0,0,W,H);
   if (!history.length) return;
   const losses = history.map(h => h.loss);
   const max = Math.max(...losses), min = Math.min(...losses);
   const range = (max - min) || 1;
-  ctx.strokeStyle = '#5fa572'; ctx.lineWidth = 2; ctx.beginPath();
+  // axis
+  ctx.strokeStyle = '#222838'; ctx.lineWidth = 1 * dpr;
+  ctx.beginPath();
+  ctx.moveTo(pad, pad/2); ctx.lineTo(pad, H - pad);
+  ctx.lineTo(W - pad/2, H - pad); ctx.stroke();
+  // line
+  ctx.strokeStyle = '#5fa572'; ctx.lineWidth = 2 * dpr; ctx.beginPath();
   history.forEach((h,i) => {
-    const x = pad + (W - 2*pad) * (i / Math.max(1, history.length-1));
-    const y = H - pad - (H - 2*pad) * ((h.loss - min) / range);
+    const x = pad + (W - 1.5*pad) * (i / Math.max(1, history.length-1));
+    const y = H - pad - (H - 1.5*pad) * ((h.loss - min) / range);
     if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
   });
   ctx.stroke();
-  ctx.fillStyle = '#9aa3b3'; ctx.font = '11px system-ui';
-  ctx.fillText('loss '+min.toFixed(2), 4, H - pad);
-  ctx.fillText('loss '+max.toFixed(2), 4, pad + 10);
-  ctx.fillText('epoch 1', pad, H - 6);
-  ctx.fillText('epoch '+history.length, W - pad - 40, H - 6);
+  ctx.fillStyle = '#9aa3b3'; ctx.font = (11 * dpr) + 'px system-ui';
+  ctx.fillText('损失 ' + max.toFixed(2), 4 * dpr, pad/2 + 10 * dpr);
+  ctx.fillText('损失 ' + min.toFixed(2), 4 * dpr, H - pad - 4 * dpr);
+  ctx.fillText('第 1 轮', pad, H - 8 * dpr);
+  const lastLabel = '第 ' + history.length + ' 轮';
+  ctx.fillText(lastLabel, W - pad - ctx.measureText(lastLabel).width, H - 8 * dpr);
+}
+window.addEventListener('resize', () => drawChart(lastHistory));
+let lastHistory = [];
+
+function updateDevice(info) {
+  if (!info) return;
+  const pill = $('devicePill');
+  pill.classList.toggle('cuda', info.kind === 'cuda');
+  pill.classList.toggle('cpu',  info.kind === 'cpu');
+  $('deviceLabel').textContent = info.label || info.kind;
 }
 
 async function poll() {
   try {
     const r = await fetch('/api/train/state');
     const s = await r.json();
-    $('s_msg').textContent   = s.message;
+    $('s_msg').textContent   = STATE_TEXT[s.message] || s.message;
+    $('s_dataset').textContent = s.config && s.config.dataset ? s.config.dataset : $('dataset').value;
     $('s_epoch').textContent = `${s.epoch} / ${s.total_epochs}`;
     $('s_step').textContent  = `${s.step} / ${s.steps_per_epoch}`;
     $('s_loss').textContent  = s.loss ? s.loss.toFixed(3) : '—';
@@ -147,10 +366,49 @@ async function poll() {
       p = ((s.epoch - 1) + (s.step / s.steps_per_epoch)) / s.total_epochs;
     } else if (s.message === 'finished') p = 1;
     $('bar').style.width = (Math.min(1, Math.max(0,p))*100).toFixed(1)+'%';
-    drawChart(s.history || []);
+    lastHistory = s.history || [];
+    drawChart(lastHistory);
+    updateDevice(s.device_info);
+    if (window.updateArch3D) window.updateArch3D(s.arch, +($('batch_size').value) || null);
+    renderLatent(s.latent_mu, s.latent_logvar);
   } catch (e) { /* ignore */ }
 }
+
+function renderLatent(mu, logvar) {
+  const host = $('latBars');
+  if (!mu || mu.length !== 6) {
+    if (!host.dataset.empty) {
+      host.innerHTML = '<div style="grid-column:1/-1; color:#9aa3b3; font-size:.85rem;">尚无潜变量样本。</div>';
+      host.dataset.empty = '1';
+    }
+    return;
+  }
+  delete host.dataset.empty;
+  host.innerHTML = '';
+  for (let i = 0; i < 6; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'lat-cell';
+    const sym = mu[i] >= 0 ? '⚊ 阳' : '⚋ 阴';
+    const lv = (logvar && logvar.length === 6) ? logvar[i].toFixed(2) : '—';
+    cell.innerHTML = `z<sub>${i+1}</sub> · ${sym}
+        <span class="v">${mu[i].toFixed(2)}</span>
+        <span class="lv">lv=${lv}</span>`;
+    host.appendChild(cell);
+  }
+}
 setInterval(poll, 800); poll();
+</script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import { createArchViz } from '/static/arch3d.js';
+const viz = createArchViz({
+  canvas: document.getElementById('arch3d'),
+  tip:    document.getElementById('archTip'),
+  empty:  document.getElementById('archEmpty'),
+});
+window.updateArch3D = viz.update;
 </script>
 </body>
 </html>

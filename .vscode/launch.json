@@ -22,9 +22,10 @@
             "justMyCode": true,
             "cwd": "${workspaceFolder}",
             "args": [
-                "--dataset", "mnist",
+                "--dataset", "stl10",
                 "--epochs", "20",
-                "--beta", "4.0"
+                "--beta", "4.0",
+                "--device", "auto"
             ]
         },
         {

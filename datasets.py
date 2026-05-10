@@ -21,11 +21,44 @@ from torch.utils.data import DataLoader, ConcatDataset
 from torchvision import datasets, transforms
 
 
+DATASET_REQUIRED_FILES = {
+    "stl10": [
+        os.path.join("stl10_binary", "train_X.bin"),
+        os.path.join("stl10_binary", "test_X.bin"),
+        os.path.join("stl10_binary", "unlabeled_X.bin"),
+    ],
+    "cifar10": [
+        os.path.join("cifar-10-batches-py", "data_batch_1"),
+        os.path.join("cifar-10-batches-py", "test_batch"),
+    ],
+    "mnist": [
+        os.path.join("MNIST", "raw", "train-images-idx3-ubyte"),
+        os.path.join("MNIST", "raw", "train-labels-idx1-ubyte"),
+        os.path.join("MNIST", "raw", "t10k-images-idx3-ubyte"),
+        os.path.join("MNIST", "raw", "t10k-labels-idx1-ubyte"),
+    ],
+    "fashion": [
+        os.path.join("FashionMNIST", "raw", "train-images-idx3-ubyte"),
+        os.path.join("FashionMNIST", "raw", "train-labels-idx1-ubyte"),
+        os.path.join("FashionMNIST", "raw", "t10k-images-idx3-ubyte"),
+        os.path.join("FashionMNIST", "raw", "t10k-labels-idx1-ubyte"),
+    ],
+}
+
+
 def _rgb_tfm(size: int):
     return transforms.Compose([
         transforms.Resize((size, size)),
         transforms.ToTensor(),  # [0,1] floats, shape (3,H,W)
     ])
+
+
+def dataset_available(name: str, data_root: str = "./data") -> bool:
+    name = name.lower()
+    required = DATASET_REQUIRED_FILES.get(name)
+    if required is None:
+        raise ValueError(f"Unknown dataset: {name}")
+    return all(os.path.exists(os.path.join(data_root, path)) for path in required)
 
 
 def get_dataloaders(name: str = "stl10", data_root: str = "./data",

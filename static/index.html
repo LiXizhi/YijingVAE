@@ -1,18 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>Yijing β-VAE</title>
+<title>易经 β-VAE</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   :root { color-scheme: dark; }
-  body { font-family: system-ui, sans-serif; background:#11141a; color:#e8e8ec;
+  body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+         background:#11141a; color:#e8e8ec;
          display:flex; min-height:100vh; align-items:center; justify-content:center;
          margin:0; }
   .card { background:#1b1f2a; padding:2.5rem 3rem; border-radius:16px;
           box-shadow:0 10px 40px rgba(0,0,0,.5); max-width:560px; }
   h1 { margin-top:0; font-weight:600; letter-spacing:.04em; }
-  p { line-height:1.6; color:#b8bfcd; }
+  p { line-height:1.8; color:#b8bfcd; }
   .links { display:flex; gap:1rem; margin-top:1.6rem; }
   a.btn { flex:1; text-align:center; padding:.9rem 1.2rem; border-radius:10px;
           background:#3a4a78; color:white; text-decoration:none; font-weight:600;
@@ -24,13 +25,13 @@
 <body>
   <div class="card">
     <div class="hex">䷀ ䷁ ䷂ ䷃ ䷄ ䷅</div>
-    <h1>Yijing β-VAE</h1>
-    <p>A Variational Auto-Encoder with <b>six latent variables</b>, one for each
-       <i>yao</i> (line) of an <i>I Ching</i> hexagram. Train it on image data,
-       then play with the six lines to see what the model imagines.</p>
+    <h1>易经 β-VAE</h1>
+    <p>一个具有<b>六个潜变量</b>的变分自编码器（VAE），每一个潜变量对应
+       <i>易经</i>卦象中的一<i>爻</i>。先用图像数据集训练模型，
+       再拨动六爻，看看模型会想象出怎样的图像。</p>
     <div class="links">
-      <a class="btn" href="/train">Train</a>
-      <a class="btn" href="/play">Play</a>
+      <a class="btn" href="/train">训练</a>
+      <a class="btn" href="/play">推演</a>
     </div>
   </div>
 </body>

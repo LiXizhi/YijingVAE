@@ -23,9 +23,13 @@ from model import BetaVAE, beta_vae_loss, LATENT_DIM
 from datasets import get_dataloaders
 
 
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
 @dataclass
 class TrainConfig:
     dataset: str = "stl10"        # 64x64 RGB real-world photos
+    data_root: str = os.path.join(ROOT, "data")
     epochs: int = 20
     batch_size: int = 128
     lr: float = 1e-3
@@ -33,8 +37,8 @@ class TrainConfig:
     hidden: int = 64
     image_size: int = 64
     num_workers: int = 0
-    out_dir: str = "./checkpoints"
-    device: str = "cuda"          # GPU by default; falls back to CPU if unavailable
+    out_dir: str = os.path.join(ROOT, "checkpoints")
+    device: str = "auto"          # use GPU when available; otherwise CPU
 
 
 @dataclass
@@ -50,6 +54,9 @@ class TrainState:
     history: list = field(default_factory=list)  # list of {epoch, loss, recon, kld}
     message: str = "idle"
     config: dict = field(default_factory=dict)
+    # Live latent stats from the most recent training batch (per-dim mean of mu).
+    latent_mu: list = field(default_factory=list)
+    latent_logvar: list = field(default_factory=list)
 
 
 def _resolve_device(name: str) -> torch.device:
@@ -135,13 +142,22 @@ class TrainingManager:
         try:
             os.makedirs(cfg.out_dir, exist_ok=True)
             device = _resolve_device(cfg.device)
+            with self._lock:
+                self.state.message = f"preparing {cfg.dataset} from {cfg.data_root}"
             train_loader, _, in_channels, image_size = get_dataloaders(
                 cfg.dataset, batch_size=cfg.batch_size,
-                num_workers=cfg.num_workers, image_size=cfg.image_size)
+                num_workers=cfg.num_workers, image_size=cfg.image_size,
+                data_root=cfg.data_root)
 
+            with self._lock:
+                self.state.message = "building model"
             model = BetaVAE(in_channels=in_channels, image_size=image_size,
                             latent_dim=LATENT_DIM, hidden=cfg.hidden).to(device)
             opt = optim.Adam(model.parameters(), lr=cfg.lr)
+            # Expose the live model so the web UI can query its tensor shapes
+            # while training is in progress.
+            self.model = model
+            self.device = device
 
             steps_per_epoch = len(train_loader)
             with self._lock:
@@ -174,6 +190,10 @@ class TrainingManager:
                         self.state.loss = loss.item()
                         self.state.recon = recon.item()
                         self.state.kld = kld.item()
+                        # Update latent stats every few steps to keep cost low.
+                        if step % 5 == 0 or step == 1:
+                            self.state.latent_mu = mu.detach().mean(0).cpu().tolist()
+                            self.state.latent_logvar = logvar.detach().mean(0).cpu().tolist()
 
                 n = max(1, step)
                 entry = {"epoch": epoch,
@@ -217,6 +237,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dataset", default="stl10",
                    choices=["stl10", "cifar10", "mnist", "fashion"])
+    p.add_argument("--data-root", default=os.path.join(ROOT, "data"))
     p.add_argument("--epochs",  type=int, default=20)
     p.add_argument("--batch-size", type=int, default=128)
     p.add_argument("--lr",      type=float, default=1e-3)
@@ -224,11 +245,11 @@ def main():
     p.add_argument("--hidden",  type=int, default=64)
     p.add_argument("--image-size", type=int, default=64)
     p.add_argument("--num-workers", type=int, default=0)
-    p.add_argument("--out-dir", default="./checkpoints")
-    p.add_argument("--device",  default="cuda")
+    p.add_argument("--out-dir", default=os.path.join(ROOT, "checkpoints"))
+    p.add_argument("--device",  default="auto")
     args = p.parse_args()
 
-    cfg = TrainConfig(dataset=args.dataset, epochs=args.epochs,
+    cfg = TrainConfig(dataset=args.dataset, data_root=args.data_root, epochs=args.epochs,
                       batch_size=args.batch_size, lr=args.lr, beta=args.beta,
                       hidden=args.hidden, image_size=args.image_size,
                       num_workers=args.num_workers,

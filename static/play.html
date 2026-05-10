@@ -1,13 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>Play · Yijing β-VAE</title>
+<title>推演 · 易经 β-VAE</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { font-family: system-ui, sans-serif; background:#11141a; color:#e8e8ec;
+  body { font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+         background:#11141a; color:#e8e8ec;
          margin:0; padding:1.5rem; }
   h1 { margin:0 0 1rem; font-weight:600; }
   nav a { color:#8ab1ff; margin-right:1rem; text-decoration:none; }
@@ -36,26 +37,57 @@
          width: 100%; max-width: 360px; aspect-ratio:1/1;
          background:#10131a; border-radius:10px; margin: 0 auto; }
   .msg { color:#d7c98a; font-style:italic; margin-top:.6rem; min-height:1.2em; }
-  .legend { color:#9aa3b3; font-size:.85rem; margin-top:.4rem; }
+  .legend { color:#9aa3b3; font-size:.85rem; margin-top:.4rem; line-height:1.7; }
+
+  /* 3D 网络结构可视化 */
+  .arch3d-wrap { position:relative; margin-top:.8rem; }
+  #arch3d { width:100%; height:340px; display:block;
+            background:radial-gradient(ellipse at center, #161a24 0%, #0c0e14 100%);
+            border-radius:12px; cursor:grab; }
+  #arch3d:active { cursor:grabbing; }
+  #archTip { position:absolute; pointer-events:none;
+             background:rgba(20,24,34,.96); color:#e8e8ec;
+             border:1px solid #3a4a78; border-radius:8px;
+             padding:.5rem .7rem; font-size:.82rem;
+             box-shadow:0 4px 14px rgba(0,0,0,.5);
+             transform:translate(-50%, calc(-100% - 12px));
+             white-space:nowrap; opacity:0; transition:opacity .12s;
+             z-index:10; }
+  #archTip .t { color:#d7c98a; font-weight:600; }
+  #archTip .s { color:#9aa3b3; font-family:"Consolas", monospace;
+                font-size:.78rem; margin-top:.2rem; }
+  #archTip .n { color:#9aa3b3; font-size:.75rem; margin-top:.2rem; }
+  .arch-empty { position:absolute; inset:0; display:flex; align-items:center;
+                justify-content:center; color:#6c768a; font-size:.9rem;
+                pointer-events:none; }
+  .lat-bars { display:grid; grid-template-columns: repeat(6, 1fr);
+              gap:4px; margin-top:.5rem; }
+  .lat-cell { background:#10131a; border-radius:6px; padding:.3rem .15rem;
+              text-align:center; font-size:.7rem; color:#9aa3b3;
+              border:1px solid #2a3142; }
+  .lat-cell .v { display:block; font-family: "Consolas", monospace;
+                 color:#d7c98a; font-weight:600; font-size:.85rem;
+                 margin-top:.15rem; font-variant-numeric: tabular-nums; }
+  .arch-title { font-size:.78rem; color:#9aa3b3; text-transform:uppercase;
+                letter-spacing:.06em; margin:.6rem 0 .3rem; }
 </style>
 </head>
 <body>
-<nav><a href="/">← Home</a><a href="/train">Train →</a></nav>
-<h1>Cast a hexagram — let the model imagine</h1>
+<nav><a href="/">← 首页</a><a href="/train">训练 →</a></nav>
+<h1>起卦 — 让模型为你想象</h1>
 
 <div class="wrap">
   <div class="card">
-    <h3 style="margin-top:0">The Six Yao</h3>
-    <p class="legend">Each slider drives one latent dimension. A positive value
-       is a <b>yang</b> (solid) line; a negative value is a <b>yin</b> (broken) line.
-       The hexagram below is read bottom-up, like in the I Ching.</p>
+    <h3 style="margin-top:0">六爻</h3>
+    <p class="legend">每个滑块控制一个潜变量。正值对应<b>阳爻</b>（实线），
+       负值对应<b>阴爻</b>（断线）。下方卦象自下而上读取，与《易经》传统一致。</p>
     <div id="yaos"></div>
     <div class="controls">
-      <button id="btnRandom">Random</button>
-      <button class="alt" id="btnZero">Reset</button>
-      <button class="alt" id="btnReload">Reload model</button>
+      <button id="btnRandom">随机起卦</button>
+      <button class="alt" id="btnZero">归零</button>
+      <button class="alt" id="btnReload">重新载入模型</button>
       <label style="display:flex; align-items:center; gap:.4rem; margin-left:auto;">
-        <input type="checkbox" id="live" checked /> live update
+        <input type="checkbox" id="live" checked /> 实时更新
       </label>
     </div>
     <div class="hex-art" id="hexArt"></div>
@@ -63,16 +95,31 @@
   </div>
 
   <div class="card">
-    <h3 style="margin-top:0">Generated image</h3>
-    <img id="img" alt="decoded image" />
+    <h3 style="margin-top:0">生成图像</h3>
+    <img id="img" alt="解码生成的图像" />
     <div class="legend" id="zText" style="margin-top:.8rem; word-break:break-all;"></div>
+
+    <div class="arch-title">VAE 张量形状（数据流）</div>
+    <p class="legend" style="margin-top:0">输入 / 输出皆为二维图像，编码器逐步压缩为 6 维潜向量后再由解码器还原，
+       侧视形成 <b style="color:#d7c98a">X 形</b> 漏斗。
+       <span style="color:#5b86c4">蓝</span>=编码器，
+       <span style="color:#d7c98a">金</span>=六爻潜变量，
+       <span style="color:#5fa572">绿</span>=解码器。
+       鼠标拖动旋转，悬停层片查看张量形状。</p>
+    <div class="arch3d-wrap">
+      <canvas id="arch3d"></canvas>
+      <div id="archTip"></div>
+      <div class="arch-empty" id="archEmpty">尚未载入模型，无法显示形状。</div>
+    </div>
+    <div class="arch-title">六爻潜向量 z（当前值）</div>
+    <div class="lat-bars" id="latBars"></div>
   </div>
 </div>
 
 <script>
 const YAO_NAMES = [
-  '初爻 (1st)', '二爻 (2nd)', '三爻 (3rd)',
-  '四爻 (4th)', '五爻 (5th)', '上爻 (6th)'
+  '初爻 (1)', '二爻 (2)', '三爻 (3)',
+  '四爻 (4)', '五爻 (5)', '上爻 (6)'
 ];
 const $ = id => document.getElementById(id);
 
@@ -92,6 +139,7 @@ function buildSliders() {
     el.addEventListener('input', () => {
       $('v'+el.dataset.i).textContent = (+el.value).toFixed(2);
       drawHex();
+      drawLatentBars();
       if ($('live').checked) requestDecode();
     });
   });
@@ -107,6 +155,7 @@ function setZ(z) {
     $('v'+i).textContent = (+z[i]).toFixed(2);
   });
   drawHex();
+  drawLatentBars();
 }
 
 function drawHex() {
@@ -116,16 +165,41 @@ function drawHex() {
   for (let i = 0; i < 6; i++) {
     const row = document.createElement('div');
     row.className = 'line';
-    if (z[i] >= 0) {                    // yang: one solid bar
+    if (z[i] >= 0) {                    // 阳：单段实线
       const seg = document.createElement('div');
       seg.className = 'seg'; row.appendChild(seg);
-    } else {                            // yin: two segments with a gap
+    } else {                            // 阴：两段中间留缝
       const a = document.createElement('div'); a.className = 'seg';
       const b = document.createElement('div'); b.className = 'seg';
       row.appendChild(a); row.appendChild(b);
     }
     host.appendChild(row);
   }
+}
+
+function drawLatentBars() {
+  const z = getZ();
+  const host = $('latBars');
+  host.innerHTML = '';
+  for (let i = 0; i < 6; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'lat-cell';
+    const symbol = z[i] >= 0 ? '⚊ 阳' : '⚋ 阴';
+    cell.innerHTML = `z<sub>${i+1}</sub> · ${symbol}<span class="v">${z[i].toFixed(2)}</span>`;
+    host.appendChild(cell);
+  }
+}
+
+function fmtShape(shape) {
+  // shape 不含 batch 维，前置一个 B
+  const dims = ['<span class="b">B</span>', ...shape.map(d => d)];
+  return '(' + dims.join(' × ') + ')';
+}
+
+// 3D viz 由模块脚本注入到 window.updateArch3D
+function renderArch(arch) {
+  window.__lastArch = arch;
+  if (window.updateArch3D) window.updateArch3D(arch, 1);
 }
 
 let pending = false, queued = false;
@@ -145,7 +219,7 @@ async function requestDecode() {
       $('zText').textContent = 'z = [' + z.map(v=>v.toFixed(2)).join(', ') + ']';
       $('status').textContent = '';
     } else {
-      $('status').textContent = j.error || 'decode failed';
+      $('status').textContent = j.error || '解码失败';
     }
   } catch (e) {
     $('status').textContent = e.message;
@@ -156,7 +230,7 @@ async function requestDecode() {
 }
 
 $('btnRandom').onclick = () => {
-  // gaussian-ish noise via Box-Muller, scaled
+  // Box-Muller 高斯噪声
   const z = Array.from({length:6}, () => {
     const u = Math.random() || 1e-9, v = Math.random() || 1e-9;
     return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
@@ -165,22 +239,50 @@ $('btnRandom').onclick = () => {
 };
 $('btnZero').onclick   = () => { setZ([0,0,0,0,0,0]); requestDecode(); };
 $('btnReload').onclick = async () => {
-  $('status').textContent = 'reloading model…';
+  $('status').textContent = '正在重新载入模型…';
   const r = await fetch('/api/model/load', {method:'POST'});
   const j = await r.json();
-  $('status').textContent = j.loaded ? 'model loaded' : 'no checkpoint found';
-  if (j.loaded) requestDecode();
+  $('status').textContent = j.loaded ? '模型已载入' : '没有可用的模型权重';
+  if (j.loaded) { await refreshInfo(); requestDecode(); }
 };
+
+async function refreshInfo() {
+  try {
+    const r = await fetch('/api/model/info');
+    const j = await r.json();
+    if (j.loaded) {
+      renderArch(j.arch);
+      return true;
+    } else {
+      renderArch(null);
+      return false;
+    }
+  } catch (e) { return false; }
+}
 
 buildSliders();
 drawHex();
+drawLatentBars();
 (async () => {
-  const r = await fetch('/api/model/info');
-  const j = await r.json();
-  if (j.loaded) requestDecode();
+  const ok = await refreshInfo();
+  if (ok) requestDecode();
   else $('status').textContent =
-    'No trained model yet — train one on the Train page, then click Reload model.';
+    '尚未训练模型 — 请先到「训练」页训练一个，然后回到此页点击「重新载入模型」。';
 })();
+</script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import { createArchViz } from '/static/arch3d.js';
+const viz = createArchViz({
+  canvas: document.getElementById('arch3d'),
+  tip:    document.getElementById('archTip'),
+  empty:  document.getElementById('archEmpty'),
+});
+window.updateArch3D = viz.update;
+// If refreshInfo() ran before this module loaded, re-trigger once.
+if (window.__lastArch !== undefined) viz.update(window.__lastArch, 1);
 </script>
 </body>
 </html>

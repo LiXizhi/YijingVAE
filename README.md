@@ -8,7 +8,7 @@ and watch the model imagine images.
 ```
 YijingVAE/
 ├── model.py        # BetaVAE (6-dim latent) + loss
-├── datasets.py     # MNIST / FashionMNIST loaders
+├── datasets.py     # STL-10 / CIFAR-10 / MNIST / FashionMNIST loaders
 ├── train.py        # CLI training + threaded TrainingManager
 ├── server.py       # Flask server (UI + JSON API)
 ├── static/
@@ -27,7 +27,8 @@ pip install -r requirements.txt
 ```
 
 PyTorch may need a CUDA-specific install — see https://pytorch.org if you
-want GPU support. CPU works fine for MNIST.
+want GPU support. CPU works fine for MNIST. STL-10 trains on CPU too, but a
+full 64x64 epoch can take several minutes.
 
 ## Run the web app
 
@@ -47,11 +48,12 @@ the play page automatically uses the latest checkpoint.
 ## Train from the CLI instead
 
 ```powershell
-python train.py --dataset mnist --epochs 20 --beta 4.0
+python train.py --dataset stl10 --epochs 20 --beta 4.0 --device auto
 ```
 
-Arguments: `--dataset {mnist,fashion}`, `--epochs`, `--batch-size`, `--lr`,
-`--beta`, `--hidden`, `--device {auto,cpu,cuda}`, `--out-dir`.
+Arguments: `--dataset {stl10,cifar10,mnist,fashion}`, `--data-root`, `--epochs`,
+`--batch-size`, `--lr`, `--beta`, `--hidden`, `--device {auto,cpu,cuda}`,
+`--out-dir`.
 
 ## Notes on the six-yao mapping
 
