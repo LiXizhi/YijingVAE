@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Play · Yijing β-VAE</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background:#11141a; color:#e8e8ec;
+         margin:0; padding:1.5rem; }
+  h1 { margin:0 0 1rem; font-weight:600; }
+  nav a { color:#8ab1ff; margin-right:1rem; text-decoration:none; }
+  .wrap { display:grid; gap:1.5rem; grid-template-columns: 1fr 1fr;
+          align-items:start; }
+  @media (max-width: 820px) { .wrap { grid-template-columns:1fr; } }
+  .card { background:#1b1f2a; border-radius:14px; padding:1.4rem 1.6rem;
+          box-shadow:0 4px 18px rgba(0,0,0,.4); }
+  .yao-row { display:grid; grid-template-columns: 90px 1fr 60px; align-items:center;
+             gap:.8rem; padding:.55rem 0; border-bottom:1px dashed #2a3142; }
+  .yao-row:last-child { border:none; }
+  .yao-name { font-weight:600; color:#d7c98a; }
+  .yao-value { font-variant-numeric: tabular-nums; text-align:right; color:#9aa3b3; }
+  input[type=range] { width:100%; accent-color:#5fa572; }
+  .controls { display:flex; gap:.6rem; flex-wrap:wrap; margin-top:1rem; }
+  button { padding:.55rem 1rem; font-weight:600; border:none; border-radius:9px;
+           cursor:pointer; background:#3a4a78; color:white; }
+  button:hover { background:#4f63a0; }
+  button.alt { background:#2a3142; }
+  .hex-art { display:flex; flex-direction:column-reverse; gap:8px;
+             padding:1rem; background:#10131a; border-radius:10px; margin-top:1rem; }
+  .line { height:14px; display:flex; gap:14px; }
+  .seg  { flex:1; background:#d7c98a; border-radius:3px; }
+  .label { color:#9aa3b3; font-size:.85rem; margin:.4rem 0 .2rem; }
+  #img { display:block; image-rendering: pixelated;
+         width: 100%; max-width: 360px; aspect-ratio:1/1;
+         background:#10131a; border-radius:10px; margin: 0 auto; }
+  .msg { color:#d7c98a; font-style:italic; margin-top:.6rem; min-height:1.2em; }
+  .legend { color:#9aa3b3; font-size:.85rem; margin-top:.4rem; }
+</style>
+</head>
+<body>
+<nav><a href="/">← Home</a><a href="/train">Train →</a></nav>
+<h1>Cast a hexagram — let the model imagine</h1>
+
+<div class="wrap">
+  <div class="card">
+    <h3 style="margin-top:0">The Six Yao</h3>
+    <p class="legend">Each slider drives one latent dimension. A positive value
+       is a <b>yang</b> (solid) line; a negative value is a <b>yin</b> (broken) line.
+       The hexagram below is read bottom-up, like in the I Ching.</p>
+    <div id="yaos"></div>
+    <div class="controls">
+      <button id="btnRandom">Random</button>
+      <button class="alt" id="btnZero">Reset</button>
+      <button class="alt" id="btnReload">Reload model</button>
+      <label style="display:flex; align-items:center; gap:.4rem; margin-left:auto;">
+        <input type="checkbox" id="live" checked /> live update
+      </label>
+    </div>
+    <div class="hex-art" id="hexArt"></div>
+    <div class="msg" id="status">…</div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Generated image</h3>
+    <img id="img" alt="decoded image" />
+    <div class="legend" id="zText" style="margin-top:.8rem; word-break:break-all;"></div>
+  </div>
+</div>
+
+<script>
+const YAO_NAMES = [
+  '初爻 (1st)', '二爻 (2nd)', '三爻 (3rd)',
+  '四爻 (4th)', '五爻 (5th)', '上爻 (6th)'
+];
+const $ = id => document.getElementById(id);
+
+function buildSliders() {
+  const host = $('yaos');
+  host.innerHTML = '';
+  for (let i = 0; i < 6; i++) {
+    const row = document.createElement('div');
+    row.className = 'yao-row';
+    row.innerHTML = `
+      <div class="yao-name">${YAO_NAMES[i]}</div>
+      <input type="range" min="-3" max="3" step="0.05" value="0" data-i="${i}" />
+      <div class="yao-value" id="v${i}">0.00</div>`;
+    host.appendChild(row);
+  }
+  host.querySelectorAll('input[type=range]').forEach(el => {
+    el.addEventListener('input', () => {
+      $('v'+el.dataset.i).textContent = (+el.value).toFixed(2);
+      drawHex();
+      if ($('live').checked) requestDecode();
+    });
+  });
+}
+
+function getZ() {
+  return Array.from(document.querySelectorAll('#yaos input[type=range]'))
+              .map(el => +el.value);
+}
+function setZ(z) {
+  document.querySelectorAll('#yaos input[type=range]').forEach((el,i) => {
+    el.value = z[i];
+    $('v'+i).textContent = (+z[i]).toFixed(2);
+  });
+  drawHex();
+}
+
+function drawHex() {
+  const z = getZ();
+  const host = $('hexArt');
+  host.innerHTML = '';
+  for (let i = 0; i < 6; i++) {
+    const row = document.createElement('div');
+    row.className = 'line';
+    if (z[i] >= 0) {                    // yang: one solid bar
+      const seg = document.createElement('div');
+      seg.className = 'seg'; row.appendChild(seg);
+    } else {                            // yin: two segments with a gap
+      const a = document.createElement('div'); a.className = 'seg';
+      const b = document.createElement('div'); b.className = 'seg';
+      row.appendChild(a); row.appendChild(b);
+    }
+    host.appendChild(row);
+  }
+}
+
+let pending = false, queued = false;
+async function requestDecode() {
+  if (pending) { queued = true; return; }
+  pending = true;
+  try {
+    const z = getZ();
+    const r = await fetch('/api/decode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ z }),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      $('img').src = j.image;
+      $('zText').textContent = 'z = [' + z.map(v=>v.toFixed(2)).join(', ') + ']';
+      $('status').textContent = '';
+    } else {
+      $('status').textContent = j.error || 'decode failed';
+    }
+  } catch (e) {
+    $('status').textContent = e.message;
+  } finally {
+    pending = false;
+    if (queued) { queued = false; requestDecode(); }
+  }
+}
+
+$('btnRandom').onclick = () => {
+  // gaussian-ish noise via Box-Muller, scaled
+  const z = Array.from({length:6}, () => {
+    const u = Math.random() || 1e-9, v = Math.random() || 1e-9;
+    return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+  });
+  setZ(z); requestDecode();
+};
+$('btnZero').onclick   = () => { setZ([0,0,0,0,0,0]); requestDecode(); };
+$('btnReload').onclick = async () => {
+  $('status').textContent = 'reloading model…';
+  const r = await fetch('/api/model/load', {method:'POST'});
+  const j = await r.json();
+  $('status').textContent = j.loaded ? 'model loaded' : 'no checkpoint found';
+  if (j.loaded) requestDecode();
+};
+
+buildSliders();
+drawHex();
+(async () => {
+  const r = await fetch('/api/model/info');
+  const j = await r.json();
+  if (j.loaded) requestDecode();
+  else $('status').textContent =
+    'No trained model yet — train one on the Train page, then click Reload model.';
+})();
+</script>
+</body>
+</html>

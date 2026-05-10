@@ -1,0 +1,46 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run Flask Server",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/server.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "FLASK_ENV": "development"
+            }
+        },
+        {
+            "name": "Train (CLI)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--dataset", "mnist",
+                "--epochs", "20",
+                "--beta", "4.0"
+            ]
+        },
+        {
+            "name": "Train (CLI, FashionMNIST)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--dataset", "fashion",
+                "--epochs", "20",
+                "--beta", "4.0",
+                "--device", "auto"
+            ]
+        }
+    ]
+}
